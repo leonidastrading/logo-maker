@@ -354,6 +354,8 @@ function composite(field, w, h, r, transparent) {
 
 const canvas = document.getElementById('view');
 const frame = document.getElementById('frame');
+const exact = document.getElementById('exact');
+const ectx = exact.getContext('2d');
 const vctx = canvas.getContext('2d');
 let cssSize = 600, margin = 60;
 let queued = false;
@@ -365,7 +367,12 @@ const isTouch = matchMedia('(pointer: coarse)').matches;
 // CSS blur + contrast filter: the same blur-then-threshold the exporter runs
 // in JS, but cheap enough to follow a slider in real time. The canvas
 // overhangs the clipped frame so the blur never smears the artboard edges.
+let lastLayoutW = 0;
 function layoutCanvas() {
+  // Phones fire resize when the address bar shows/hides while scrolling;
+  // resizing the canvas clears it, so on mobile only re-layout on width changes.
+  if (isMobile() && lastLayoutW === window.innerWidth && canvas.width) return;
+  lastLayoutW = window.innerWidth;
   const topbar = document.querySelector('.topbar');
   document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
   const board = document.querySelector('.artboard');
@@ -378,50 +385,56 @@ function layoutCanvas() {
   margin = Math.ceil(cssSize * 0.1);
   frame.style.width = frame.style.height = cssSize + 'px';
   const full = cssSize + 2 * margin;
+  const dpr = window.devicePixelRatio || 1;
   Object.assign(canvas.style, { width: full + 'px', height: full + 'px', left: -margin + 'px', top: -margin + 'px' });
-  const px = Math.min(2600, Math.round(full * (window.devicePixelRatio || 1)));
+  const px = Math.min(2600, Math.round(full * dpr));
+  const epx = Math.round(px * cssSize / full);
   if (canvas.width !== px) canvas.width = canvas.height = px;
-  draw();
+  if (exact.width !== epx) exact.width = exact.height = epx;
+  render(); // synchronously, so a resized (cleared) canvas never shows a blank frame
 }
 
 function draw() {
   if (queued) return;
   queued = true;
-  requestAnimationFrame(() => {
-    queued = false;
-    const px = canvas.width, perCss = px / (cssSize + 2 * margin);
-    const fg = params.invert ? '#fff' : '#000', bg = params.invert ? '#000' : '#fff';
-    vctx.setTransform(1, 0, 0, 1, 0, 0);
-    vctx.fillStyle = bg;
-    vctx.fillRect(0, 0, px, px);
-    const s = perCss * cssSize / D;
-    vctx.setTransform(s, 0, 0, s, margin * perCss, margin * perCss);
-    drawShapes(vctx, fg);
-    const sigma = params.goo * cssSize / D;              // CSS px
-    const dpr = perCss;
-    canvas.style.filter = sigma > 0.05
-      ? `blur(${sigma.toFixed(2)}px) contrast(${Math.max(1, 4 * sigma * dpr).toFixed(1)})`
-      : 'none';
-    frame.style.background = bg;
-    clearTimeout(settleTimer);
-    settleTimer = setTimeout(settle, 220);
-    document.getElementById('statDots').textContent = nodes.length;
-    document.getElementById('statLinks').textContent = edges.length;
-    document.getElementById('statEnds').textContent = degree.filter(d => d <= 1).length;
-  });
+  requestAnimationFrame(() => { queued = false; render(); });
 }
 
-// Once the controls go quiet, swap the GPU approximation for the exact
-// render the exporter produces, so what you see is what you download.
-let settleTimer = 0;
+function render() {
+  const px = canvas.width, perCss = px / (cssSize + 2 * margin);
+  const fg = params.invert ? '#fff' : '#000', bg = params.invert ? '#000' : '#fff';
+  vctx.setTransform(1, 0, 0, 1, 0, 0);
+  vctx.fillStyle = bg;
+  vctx.fillRect(0, 0, px, px);
+  const s = perCss * cssSize / D;
+  vctx.setTransform(s, 0, 0, s, margin * perCss, margin * perCss);
+  drawShapes(vctx, fg);
+  const sigma = params.goo * cssSize / D; // CSS px
+  const filter = sigma > 0.05
+    ? `blur(${sigma.toFixed(2)}px) contrast(${Math.max(1, 4 * sigma * perCss).toFixed(1)})`
+    : 'none';
+  // Only touch the filter when it actually changes: re-applying it makes
+  // some browsers rebuild the layer, which shows up as a flash.
+  if (filter !== currentFilter) canvas.style.filter = currentFilter = filter;
+  frame.style.background = bg;
+  exact.style.visibility = 'hidden';
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(settle, 220);
+  document.getElementById('statDots').textContent = nodes.length;
+  document.getElementById('statLinks').textContent = edges.length;
+  document.getElementById('statEnds').textContent = degree.filter(d => d <= 1).length;
+}
+
+// Once the controls go quiet, lay the exact render the exporter produces over
+// the GPU approximation, so what you see is what you download. The GPU layer
+// stays untouched underneath, so hiding the overlay again never flashes.
+let settleTimer = 0, currentFilter = '';
 function settle() {
   if (drag) { settleTimer = setTimeout(settle, 220); return; }
-  const px = canvas.width, perCss = px / (cssSize + 2 * margin);
-  const size = Math.round(cssSize * perCss), off = Math.round(margin * perCss);
+  const size = exact.width;
   const { field, r } = renderField(size, 0, 0, size, size);
-  vctx.setTransform(1, 0, 0, 1, 0, 0);
-  vctx.putImageData(composite(field, size, size, r, false), off, off);
-  canvas.style.filter = 'none';
+  ectx.putImageData(composite(field, size, size, r, false), 0, 0);
+  exact.style.visibility = 'visible';
 }
 
 // ---------- export ----------
