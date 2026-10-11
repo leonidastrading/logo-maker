@@ -222,13 +222,22 @@ const vctx = canvas.getContext('2d');
 let cssSize = 600;
 let queued = false;
 
+const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
+const isTouch = matchMedia('(pointer: coarse)').matches;
+
 function layoutCanvas() {
-  const stage = document.getElementById('stage');
-  const pad = window.innerWidth <= 760 ? 32 : 48;
-  cssSize = Math.max(200, Math.floor(Math.min(stage.clientWidth - pad, (window.innerWidth <= 760 ? Infinity : stage.clientHeight - pad), 1100)));
+  const topbar = document.querySelector('.topbar');
+  document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
+  const board = document.querySelector('.artboard');
+  if (isMobile()) {
+    cssSize = Math.min(window.innerWidth - 28, Math.round(window.innerHeight * 0.46));
+  } else {
+    cssSize = Math.min(board.clientWidth, board.clientHeight, 1100);
+  }
+  cssSize = Math.max(160, Math.floor(cssSize));
   canvas.style.width = canvas.style.height = cssSize + 'px';
   const px = Math.min(2200, Math.round(cssSize * (window.devicePixelRatio || 1)));
-  canvas.width = canvas.height = px;
+  if (canvas.width !== px) canvas.width = canvas.height = px;
   draw();
 }
 
@@ -241,6 +250,9 @@ function draw() {
     const { field, r } = renderField(s, 0, 0, s, s);
     vctx.putImageData(composite(field, s, s, r, false), 0, 0);
     canvas.style.background = params.invert ? '#000' : '#fff';
+    document.getElementById('statDots').textContent = nodes.length;
+    document.getElementById('statLinks').textContent = edges.length;
+    document.getElementById('statEnds').textContent = degree.filter(d => d <= 1).length;
   });
 }
 
@@ -498,39 +510,72 @@ function hit(p) {
   return best;
 }
 
-let drag = null;
+let drag = null, press = null, lastTap = { t: 0, x: 0, y: 0 };
+
+function addNode(p) {
+  nodes.push({ x: p.x, y: p.y, f: Math.random() * 2 - 1 });
+  generateLinks();
+  draw();
+}
+
 canvas.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   const p = toDesign(e), i = hit(p);
+  press = { x: e.clientX, y: e.clientY, moved: false, timer: 0 };
   if (i < 0) return;
   if (e.altKey) { removeNode(i); return; }
   drag = { i, dx: nodes[i].x - p.x, dy: nodes[i].y - p.y };
+  // Long-press a dot (touch) to delete it.
+  if (e.pointerType !== 'mouse') {
+    press.timer = setTimeout(() => {
+      if (drag && !press.moved) { const k = drag.i; endDrag(); removeNode(k); press = null; }
+    }, 550);
+  }
   canvas.setPointerCapture(e.pointerId);
   canvas.classList.add('dragging');
 });
 canvas.addEventListener('pointermove', e => {
+  if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) press.moved = true;
   const p = toDesign(e);
   if (drag) {
     nodes[drag.i].x = Math.min(D, Math.max(0, p.x + drag.dx));
     nodes[drag.i].y = Math.min(D, Math.max(0, p.y + drag.dy));
     draw();
-  } else {
+  } else if (e.pointerType === 'mouse') {
     canvas.classList.toggle('over', hit(p) >= 0);
   }
 });
-const endDrag = () => { drag = null; canvas.classList.remove('dragging'); };
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
+function endDrag() {
+  if (press) clearTimeout(press.timer);
+  drag = null;
+  canvas.classList.remove('dragging');
+}
+canvas.addEventListener('pointerup', e => {
+  const wasTap = press && !press.moved && !drag;
+  endDrag();
+  press = null;
+  // Double-tap empty space (touch) to add a dot; mice use dblclick below.
+  if (wasTap && e.pointerType !== 'mouse') {
+    const now = performance.now();
+    if (now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+      const p = toDesign(e);
+      if (hit(p) < 0) addNode(p);
+      lastTap.t = 0;
+    } else {
+      lastTap = { t: now, x: e.clientX, y: e.clientY };
+    }
+  }
+});
+canvas.addEventListener('pointercancel', () => { endDrag(); press = null; });
 canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
   const i = hit(toDesign(e));
-  if (i >= 0) { e.preventDefault(); removeNode(i); }
+  if (i >= 0 && !isTouch) removeNode(i);
 });
 canvas.addEventListener('dblclick', e => {
+  if (isTouch) return;
   const p = toDesign(e);
-  if (hit(p) >= 0) return;
-  nodes.push({ x: p.x, y: p.y, f: Math.random() * 2 - 1 });
-  generateLinks();
-  draw();
+  if (hit(p) < 0) addNode(p);
 });
 
 function removeNode(i) {
@@ -541,6 +586,15 @@ function removeNode(i) {
 }
 
 // ---------- boot ----------
+
+document.getElementById('hint').textContent = isTouch
+  ? 'Drag dots to move them · double-tap empty space to add a dot · long-press a dot to delete it. Changing Dots, Spread, Min spacing or New layout regenerates positions.'
+  : 'Drag dots to move them · double-click empty space to add a dot · right-click (or Alt-click) a dot to delete it. Changing Dots, Spread, Min spacing or New layout regenerates positions.';
+// Phones and iPads cap canvas size at ~16.7 MP, so default to 4096 there.
+if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (isTouch && navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent))) {
+  document.getElementById('res').value = '4096';
+  for (const o of document.querySelectorAll('#res option')) if (+o.value > 4096) o.textContent += ' (desktop only)';
+}
 
 syncControls();
 generateLayout();

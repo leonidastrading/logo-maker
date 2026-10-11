@@ -2,71 +2,84 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c0e11">
 <title>Network Logo Maker</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<aside id="panel">
-  <h1>Network Logo Maker</h1>
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="currentColor"><circle cx="5" cy="6" r="3"/><circle cx="18" cy="5" r="2.5"/><circle cx="12" cy="13" r="2.5"/><circle cx="19" cy="19" r="3"/><circle cx="5" cy="19" r="2"/></g><g stroke="currentColor" stroke-width="1.6"><path d="M5 6 12 13 18 5M12 13l7 6M12 13l-7 6"/></g></svg>
+    <span>Network Logo Maker</span>
+  </div>
+  <div class="actions">
+    <button id="newSeed" title="New random layout">🎲 <span>New layout</span></button>
+    <button id="newLinks" title="Re-roll the long links only">↻ <span>Re-roll links</span></button>
+  </div>
+</header>
 
-  <section>
-    <h2>Structure</h2>
-    <div class="row buttons">
-      <button id="newSeed" title="New random layout">🎲 New layout</button>
-      <button id="newLinks" title="Re-roll the long links only">↻ Re-roll links</button>
+<div class="app">
+  <main id="stage">
+    <div class="artboard"><canvas id="view"></canvas></div>
+    <div class="stats">
+      <div><b id="statDots">0</b><span>dots</span></div>
+      <div><b id="statLinks">0</b><span>connections</span></div>
+      <div><b id="statEnds">0</b><span>end dots</span></div>
     </div>
-    <label>Dots <output data-for="count"></output>
-      <input type="range" id="count" min="3" max="150" step="1"></label>
-    <label>Spread <output data-for="spread"></output>
-      <input type="range" id="spread" min="150" max="470" step="1"></label>
-    <label>Min spacing <output data-for="spacing"></output>
-      <input type="range" id="spacing" min="0" max="1.2" step="0.01"></label>
-    <label>Neighbour connections <output data-for="k"></output>
-      <input type="range" id="k" min="0" max="6" step="1"></label>
-    <label>Long links <output data-for="extra"></output>
-      <input type="range" id="extra" min="0" max="40" step="1"></label>
-    <label class="check"><input type="checkbox" id="tree"> Keep everything connected</label>
-  </section>
+  </main>
 
-  <section>
-    <h2>Style</h2>
-    <label>Dot size <output data-for="dot"></output>
-      <input type="range" id="dot" min="2" max="80" step="0.5"></label>
-    <label>Dot size variation <output data-for="variation"></output>
-      <input type="range" id="variation" min="0" max="1" step="0.01"></label>
-    <label>End-dot size <output data-for="endBoost"></output>
-      <input type="range" id="endBoost" min="0.3" max="3" step="0.05"></label>
-    <label>Connection thickness <output data-for="line"></output>
-      <input type="range" id="line" min="1" max="60" step="0.5"></label>
-    <label>Gooeyness <output data-for="goo"></output>
-      <input type="range" id="goo" min="0" max="30" step="0.5"></label>
-    <label class="check"><input type="checkbox" id="invert"> White on black</label>
-  </section>
+  <aside id="panel">
+    <section class="card">
+      <h2>Structure</h2>
+      <label>Dots <output data-for="count"></output>
+        <input type="range" id="count" min="3" max="150" step="1"></label>
+      <label>Spread <output data-for="spread"></output>
+        <input type="range" id="spread" min="150" max="470" step="1"></label>
+      <label>Min spacing <output data-for="spacing"></output>
+        <input type="range" id="spacing" min="0" max="1.2" step="0.01"></label>
+      <label>Neighbour connections <output data-for="k"></output>
+        <input type="range" id="k" min="0" max="6" step="1"></label>
+      <label>Long links <output data-for="extra"></output>
+        <input type="range" id="extra" min="0" max="40" step="1"></label>
+      <label class="check"><input type="checkbox" id="tree"> Keep everything connected</label>
+    </section>
 
-  <section>
-    <h2>Export</h2>
-    <label>PNG resolution
-      <select id="res">
-        <option value="2048">2048 × 2048</option>
-        <option value="4096">4096 × 4096</option>
-        <option value="8192" selected>8192 × 8192</option>
-        <option value="12000">12000 × 12000</option>
-      </select></label>
-    <label class="check"><input type="checkbox" id="transparent"> Transparent background</label>
-    <div class="row buttons">
-      <button id="png" class="primary">Download PNG</button>
-      <button id="svg">Download SVG</button>
-    </div>
-    <p id="status"></p>
-  </section>
+    <section class="card">
+      <h2>Style</h2>
+      <label>Dot size <output data-for="dot"></output>
+        <input type="range" id="dot" min="2" max="80" step="0.5"></label>
+      <label>Dot size variation <output data-for="variation"></output>
+        <input type="range" id="variation" min="0" max="1" step="0.01"></label>
+      <label>End-dot size <output data-for="endBoost"></output>
+        <input type="range" id="endBoost" min="0.3" max="3" step="0.05"></label>
+      <label>Connection thickness <output data-for="line"></output>
+        <input type="range" id="line" min="1" max="60" step="0.5"></label>
+      <label>Gooeyness <output data-for="goo"></output>
+        <input type="range" id="goo" min="0" max="30" step="0.5"></label>
+      <label class="check"><input type="checkbox" id="invert"> White on black</label>
+    </section>
 
-  <p class="hint">Drag dots to move them · double-click empty space to add a dot · right-click (or Alt-click) a dot to delete it. Changing <em>Dots</em>, <em>Spread</em>, <em>Min spacing</em> or the layout seed regenerates positions.</p>
-</aside>
+    <section class="card">
+      <h2>Export</h2>
+      <label>PNG resolution
+        <select id="res">
+          <option value="2048">2048 × 2048</option>
+          <option value="4096">4096 × 4096</option>
+          <option value="8192" selected>8192 × 8192</option>
+          <option value="12000">12000 × 12000</option>
+        </select></label>
+      <label class="check"><input type="checkbox" id="transparent"> Transparent background</label>
+      <div class="buttons">
+        <button id="png" class="primary">Download PNG</button>
+        <button id="svg">Download SVG</button>
+      </div>
+      <p id="status"></p>
+    </section>
 
-<main id="stage">
-  <canvas id="view"></canvas>
-</main>
+    <p class="hint" id="hint"></p>
+  </aside>
+</div>
 
 <script src="app.js"></script>
 </body>
