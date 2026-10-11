@@ -81,6 +81,17 @@ button:hover { border-color: #3a414d; background: #2a303a; }
 button.primary { background: var(--accent); color: #0c0e11; border-color: var(--accent); }
 button.primary:hover { background: #a5b8ff; }
 button:disabled { opacity: .5; cursor: progress; }
+.seg { display: flex; gap: 4px; padding: 4px; background: var(--raised); border-radius: 10px; margin-bottom: 14px; }
+.seg button { border: 0; background: transparent; color: var(--muted); padding: 7px 10px; }
+.seg button:hover { background: #2a303a; color: var(--text); }
+.seg button.on { background: var(--accent); color: #0c0e11; }
+.pair { display: grid; grid-template-columns: 88px 1fr; gap: 10px; }
+#letter {
+  width: 100%; margin-top: 6px; padding: 4px 8px; font: 700 22px/1.2 system-ui, sans-serif; text-align: center;
+  color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 8px;
+}
+#letter:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+[hidden] { display: none !important; }
 #status { color: var(--muted); min-height: 1.4em; margin: 0 0 8px; font-size: 13px; }
 .hint { color: var(--muted); font-size: 12px; margin: 0; padding: 0 4px 8px; }
 

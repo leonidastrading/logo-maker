@@ -8,11 +8,13 @@ const DEFAULTS = {
   count: 34, spread: 400, spacing: 0.6, k: 1, extra: 4, tree: true,
   dot: 24, variation: 0.3, endBoost: 1.3, line: 13, goo: 4,
   invert: false,
+  shape: 'circle', letter: 'A', font: 'sans', outline: 0.15, center: 0.7,
 };
 const NUMERIC = ['seed', 'linkSeed', 'count', 'spread', 'spacing', 'k', 'extra',
-  'dot', 'variation', 'endBoost', 'line', 'goo'];
+  'dot', 'variation', 'endBoost', 'line', 'goo', 'outline', 'center'];
+const STRING = ['shape', 'letter', 'font'];
 const BOOLEAN = ['tree', 'invert'];
-const LAYOUT_KEYS = new Set(['seed', 'count', 'spread', 'spacing']);
+const LAYOUT_KEYS = new Set(['seed', 'count', 'spread', 'spacing', 'shape', 'letter', 'font', 'outline', 'center']);
 const LINK_KEYS = new Set(['k', 'extra', 'tree', 'linkSeed']);
 
 const params = loadParams();
@@ -33,21 +35,135 @@ function mulberry32(a) {
 
 // ---------- graph generation ----------
 
+const FONTS = {
+  sans: '900 {s}px "Helvetica Neue", Arial, sans-serif',
+  serif: 'bold {s}px Georgia, "Times New Roman", serif',
+  rounded: 'bold {s}px ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", sans-serif',
+  mono: 'bold {s}px ui-monospace, Menlo, Consolas, monospace',
+  script: 'italic bold {s}px "Snell Roundhand", "Brush Script MT", cursive',
+};
+
+// Letter mode: the glyph is rasterised into a mask with a distance-to-edge
+// field, used to keep dots inside the strokes and links from leaving them.
+const MN = 500, MS = D / MN; // mask resolution and design units per mask pixel
+let mask = null;
+
+function letterMode() {
+  return params.shape === 'letter' && Array.from(params.letter).length > 0;
+}
+
+function buildMask() {
+  if (!letterMode()) { mask = null; return; }
+  const ch = Array.from(params.letter)[0];
+  const c = document.createElement('canvas');
+  c.width = c.height = MN;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const font = s => (FONTS[params.font] || FONTS.sans).replace('{s}', s);
+  ctx.font = font(100);
+  let m = ctx.measureText(ch);
+  const gw = (m.actualBoundingBoxLeft + m.actualBoundingBoxRight) || 60;
+  const gh = (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) || 70;
+  const box = 2 * params.spread / MS;
+  ctx.font = font(100 * Math.min(box / gw, box / gh));
+  m = ctx.measureText(ch);
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(ch,
+    MN / 2 - (m.actualBoundingBoxRight - m.actualBoundingBoxLeft) / 2,
+    MN / 2 + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
+  const data = ctx.getImageData(0, 0, MN, MN).data;
+
+  // Chamfer distance transform: distance (mask px) from each inside pixel to the outside.
+  const dist = new Float32Array(MN * MN);
+  let area = 0;
+  for (let i = 0; i < dist.length; i++) {
+    if (data[i * 4 + 3] > 127) { dist[i] = 1e9; area++; }
+  }
+  const A = 1, B = Math.SQRT2;
+  for (let y = 0; y < MN; y++) for (let x = 0; x < MN; x++) {
+    const i = y * MN + x;
+    if (!dist[i]) continue;
+    let d = dist[i];
+    d = Math.min(d, x > 0 ? dist[i - 1] + A : A, y > 0 ? dist[i - MN] + A : A,
+      x > 0 && y > 0 ? dist[i - MN - 1] + B : B, x < MN - 1 && y > 0 ? dist[i - MN + 1] + B : B);
+    dist[i] = d;
+  }
+  for (let y = MN - 1; y >= 0; y--) for (let x = MN - 1; x >= 0; x--) {
+    const i = y * MN + x;
+    if (!dist[i]) continue;
+    let d = dist[i];
+    d = Math.min(d, x < MN - 1 ? dist[i + 1] + A : A, y < MN - 1 ? dist[i + MN] + A : A,
+      x < MN - 1 && y < MN - 1 ? dist[i + MN + 1] + B : B, x > 0 && y < MN - 1 ? dist[i + MN - 1] + B : B);
+    dist[i] = d;
+  }
+  let maxD = 0;
+  for (let i = 0; i < dist.length; i++) if (dist[i] > maxD) maxD = dist[i];
+  mask = area ? { dist, area: area * MS * MS, maxD } : null;
+}
+
+function maskDist(x, y) {
+  const mx = Math.floor(x / MS), my = Math.floor(y / MS);
+  if (mx < 0 || my < 0 || mx >= MN || my >= MN) return 0;
+  return mask.dist[my * MN + mx] * MS;
+}
+
+// True when the straight segment between two dots stays inside the letter.
+function insideSegment(a, b) {
+  const len = Math.hypot(b.x - a.x, b.y - a.y), steps = Math.max(1, Math.ceil(len / (MS * 0.75)));
+  for (let s = 1; s < steps; s++) {
+    const t = s / steps;
+    if (maskDist(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t) < MS * 0.5) return false;
+  }
+  return true;
+}
+
 function generateLayout() {
+  buildMask();
   const rand = mulberry32(params.seed * 7919 + 13);
   const sizeRand = mulberry32(params.seed * 104729 + 7);
   const R = params.spread;
-  const minDist = params.spacing * R * Math.sqrt(Math.PI / params.count);
+  const area = mask ? mask.area : Math.PI * R * R;
+  const minDist = params.spacing * Math.sqrt(area / params.count);
   nodes = [];
+
+  let sample;
+  if (mask) {
+    // Keep dot centres inset from the glyph edge (less so in thin strokes).
+    const inset = Math.min(params.dot * 0.5, mask.maxD * MS * 0.6);
+    const inner = [], edge = [], ridge = [], dm = mask.dist;
+    for (let i = 0; i < dm.length; i++) {
+      const d = dm[i] * MS;
+      if (d < inset) continue;
+      inner.push(i);
+      if (d < inset + MS * 1.5) edge.push(i);
+      // Centreline: pixels at least as deep as every neighbour.
+      const v = dm[i];
+      if (v >= dm[i - 1] && v >= dm[i + 1] && v >= dm[i - MN] && v >= dm[i + MN] &&
+          v >= dm[i - MN - 1] && v >= dm[i - MN + 1] && v >= dm[i + MN - 1] && v >= dm[i + MN + 1]) ridge.push(i);
+    }
+    const outlineCount = Math.round(params.count * params.outline);
+    const centerCount = outlineCount + Math.round(params.count * params.center);
+    sample = i => {
+      const pool = i < outlineCount && edge.length ? edge
+        : i < centerCount && ridge.length ? ridge : inner;
+      const p = pool[Math.floor(rand() * pool.length)];
+      return { x: (p % MN + rand()) * MS, y: (Math.floor(p / MN) + rand()) * MS };
+    };
+  } else {
+    sample = () => {
+      const a = rand() * Math.PI * 2, r = R * Math.sqrt(rand());
+      return { x: D / 2 + Math.cos(a) * r, y: D / 2 + Math.sin(a) * r };
+    };
+  }
+
+  const tries = mask ? 250 : 80;
   for (let i = 0; i < params.count; i++) {
     let best = null, bestD = -1;
-    for (let t = 0; t < 80; t++) {
-      const a = rand() * Math.PI * 2, r = R * Math.sqrt(rand());
-      const x = D / 2 + Math.cos(a) * r, y = D / 2 + Math.sin(a) * r;
+    for (let t = 0; t < tries; t++) {
+      const p = sample(i);
       let d = Infinity;
-      for (const n of nodes) d = Math.min(d, Math.hypot(n.x - x, n.y - y));
-      if (d >= minDist) { best = { x, y }; break; }
-      if (d > bestD) { bestD = d; best = { x, y }; }
+      for (const n of nodes) d = Math.min(d, Math.hypot(n.x - p.x, n.y - p.y));
+      if (d >= minDist) { best = p; break; }
+      if (d > bestD) { bestD = d; best = p; }
     }
     nodes.push({ x: best.x, y: best.y, f: sizeRand() * 2 - 1 });
   }
@@ -64,7 +180,16 @@ function generateLinks() {
     set.add(key); edges.push([a, b]);
     return true;
   };
-  const dist = (a, b) => Math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y);
+  // In letter mode a link may only exist if it stays inside the glyph.
+  const okCache = new Map();
+  const ok = (a, b) => {
+    if (!mask) return true;
+    const key = a < b ? a * 100000 + b : b * 100000 + a;
+    let v = okCache.get(key);
+    if (v === undefined) okCache.set(key, v = insideSegment(nodes[a], nodes[b]));
+    return v;
+  };
+  const dist = (a, b) => ok(a, b) ? Math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y) : Infinity;
 
   // Minimum spanning tree (Prim) so the whole mark is one connected shape.
   if (params.tree && n > 1) {
@@ -74,7 +199,7 @@ function generateLinks() {
       let u = -1;
       for (let i = 0; i < n; i++) if (!inTree[i] && (u < 0 || best[i] < best[u])) u = i;
       inTree[u] = 1;
-      if (from[u] >= 0) add(from[u], u);
+      if (from[u] >= 0 && best[u] < Infinity) add(from[u], u);
       for (let v = 0; v < n; v++) {
         if (inTree[v]) continue;
         const d = dist(u, v);
@@ -88,7 +213,7 @@ function generateLinks() {
     const others = [];
     for (let j = 0; j < n; j++) if (j !== i) others.push([dist(i, j), j]);
     others.sort((a, b) => a[0] - b[0]);
-    for (let m = 0; m < Math.min(params.k, others.length); m++) add(i, others[m][1]);
+    for (let m = 0; m < Math.min(params.k, others.length) && others[m][0] < Infinity; m++) add(i, others[m][1]);
   }
 
   // Long links between random pairs.
@@ -485,6 +610,7 @@ function loadParams() {
   const q = new URLSearchParams(location.hash.slice(1));
   for (const k of NUMERIC) if (q.has(k) && isFinite(+q.get(k))) p[k] = +q.get(k);
   for (const k of BOOLEAN) if (q.has(k)) p[k] = q.get(k) === '1';
+  for (const k of STRING) if (q.has(k)) p[k] = q.get(k);
   return p;
 }
 
@@ -492,11 +618,12 @@ function saveParams() {
   const q = new URLSearchParams();
   for (const k of NUMERIC) q.set(k, params[k]);
   for (const k of BOOLEAN) q.set(k, params[k] ? '1' : '0');
+  for (const k of STRING) q.set(k, params[k]);
   history.replaceState(null, '', '#' + q.toString());
 }
 
 function fmt(key, v) {
-  if (key === 'variation' || key === 'spacing') return Math.round(v * 100) + '%';
+  if (key === 'variation' || key === 'spacing' || key === 'outline' || key === 'center') return Math.round(v * 100) + '%';
   if (key === 'endBoost') return '×' + v.toFixed(2);
   return String(v);
 }
@@ -510,6 +637,11 @@ function syncControls() {
     if (out) out.textContent = fmt(k, params[k]);
   }
   for (const k of BOOLEAN) document.getElementById(k).checked = params[k];
+  document.getElementById('letter').value = params.letter;
+  document.getElementById('font').value = params.font;
+  for (const b of document.querySelectorAll('#shapeSeg button')) b.classList.toggle('on', b.dataset.shape === params.shape);
+  document.getElementById('letterOpts').hidden = params.shape !== 'letter';
+  document.getElementById('spreadLabel').textContent = params.shape === 'letter' ? 'Size' : 'Spread';
 }
 
 function onChange(key) {
@@ -528,6 +660,25 @@ for (const k of BOOLEAN) {
   const el = document.getElementById(k);
   el.addEventListener('change', () => { params[k] = el.checked; onChange(k); });
 }
+for (const b of document.querySelectorAll('#shapeSeg button')) {
+  b.addEventListener('click', () => {
+    if (params.shape === b.dataset.shape) return;
+    params.shape = b.dataset.shape;
+    // A letter needs more, smaller dots than a round cluster to read clearly.
+    if (params.shape === 'letter' && params.count < 60) {
+      Object.assign(params, { count: 60, dot: 17, line: 10 });
+    }
+    onChange('shape');
+  });
+}
+document.getElementById('letter').addEventListener('input', e => {
+  const ch = Array.from(e.target.value.trim()).slice(-1).join('');
+  e.target.value = ch;
+  if (!ch) return;
+  params.letter = ch; onChange('letter');
+});
+document.getElementById('letter').addEventListener('focus', e => e.target.select());
+document.getElementById('font').addEventListener('change', e => { params.font = e.target.value; onChange('font'); });
 document.getElementById('newSeed').addEventListener('click', () => {
   params.seed = Math.floor(Math.random() * 1e6); onChange('seed');
 });

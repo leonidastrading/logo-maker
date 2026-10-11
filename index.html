@@ -32,9 +32,31 @@
   <aside id="panel">
     <section class="card">
       <h2>Structure</h2>
+      <div class="seg" id="shapeSeg">
+        <button data-shape="circle">● Circle</button>
+        <button data-shape="letter">A Letter</button>
+      </div>
+      <div id="letterOpts" hidden>
+        <div class="pair">
+          <label>Letter
+            <input type="text" id="letter" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
+          <label>Font
+            <select id="font">
+              <option value="sans">Sans Black</option>
+              <option value="serif">Serif</option>
+              <option value="rounded">Rounded</option>
+              <option value="mono">Mono</option>
+              <option value="script">Script</option>
+            </select></label>
+        </div>
+        <label>Dots on outline <output data-for="outline"></output>
+          <input type="range" id="outline" min="0" max="1" step="0.01"></label>
+        <label>Dots on centerline <output data-for="center"></output>
+          <input type="range" id="center" min="0" max="1" step="0.01"></label>
+      </div>
       <label>Dots <output data-for="count"></output>
         <input type="range" id="count" min="3" max="150" step="1"></label>
-      <label>Spread <output data-for="spread"></output>
+      <label><span id="spreadLabel">Spread</span> <output data-for="spread"></output>
         <input type="range" id="spread" min="150" max="470" step="1"></label>
       <label>Min spacing <output data-for="spacing"></output>
         <input type="range" id="spacing" min="0" max="1.2" step="0.01"></label>
