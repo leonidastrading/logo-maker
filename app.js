@@ -52,8 +52,12 @@ function letterMode() {
   return params.shape === 'letter' && Array.from(params.letter).length > 0;
 }
 
+let maskKey = '';
 function buildMask() {
-  if (!letterMode()) { mask = null; return; }
+  if (!letterMode()) { mask = null; maskKey = ''; return; }
+  const key = [params.letter, params.font, params.spread].join('|');
+  if (key === maskKey) return;
+  maskKey = key;
   const ch = Array.from(params.letter)[0];
   const c = document.createElement('canvas');
   c.width = c.height = MN;
@@ -158,11 +162,15 @@ function generateLayout() {
   const tries = mask ? 250 : 80;
   for (let i = 0; i < params.count; i++) {
     let best = null, bestD = -1;
+    const min2 = minDist * minDist;
     for (let t = 0; t < tries; t++) {
       const p = sample(i);
       let d = Infinity;
-      for (const n of nodes) d = Math.min(d, Math.hypot(n.x - p.x, n.y - p.y));
-      if (d >= minDist) { best = p; break; }
+      for (const n of nodes) {
+        const dx = n.x - p.x, dy = n.y - p.y, d2 = dx * dx + dy * dy;
+        if (d2 < d) { d = d2; if (d <= bestD) break; } // can't beat the best so far
+      }
+      if (d >= min2) { best = p; break; }
       if (d > bestD) { bestD = d; best = p; }
     }
     nodes.push({ x: best.x, y: best.y, f: sizeRand() * 2 - 1 });
@@ -189,31 +197,36 @@ function generateLinks() {
     if (v === undefined) okCache.set(key, v = insideSegment(nodes[a], nodes[b]));
     return v;
   };
-  const dist = (a, b) => ok(a, b) ? Math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y) : Infinity;
+  const raw = (a, b) => Math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y);
+  const dist = (a, b) => ok(a, b) ? raw(a, b) : Infinity;
 
-  // Minimum spanning tree (Prim) so the whole mark is one connected shape.
+  // Candidate pairs, shortest first. The (costly) inside-the-letter check is
+  // only run on pairs we'd actually use.
+  const pairs = [];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) pairs.push([raw(i, j), i, j]);
+  pairs.sort((p, q) => p[0] - q[0]);
+
+  // Minimum spanning tree (Kruskal) so the whole mark is one connected shape.
   if (params.tree && n > 1) {
-    const inTree = new Uint8Array(n), best = new Float64Array(n).fill(Infinity), from = new Int32Array(n).fill(-1);
-    best[0] = 0;
-    for (let it = 0; it < n; it++) {
-      let u = -1;
-      for (let i = 0; i < n; i++) if (!inTree[i] && (u < 0 || best[i] < best[u])) u = i;
-      inTree[u] = 1;
-      if (from[u] >= 0 && best[u] < Infinity) add(from[u], u);
-      for (let v = 0; v < n; v++) {
-        if (inTree[v]) continue;
-        const d = dist(u, v);
-        if (d < best[v]) { best[v] = d; from[v] = u; }
-      }
+    const parent = Int32Array.from({ length: n }, (_, i) => i);
+    const find = x => { while (parent[x] !== x) x = parent[x] = parent[parent[x]]; return x; };
+    let joined = 0;
+    for (const [, i, j] of pairs) {
+      const ri = find(i), rj = find(j);
+      if (ri === rj || !ok(i, j)) continue;
+      parent[ri] = rj; add(i, j);
+      if (++joined === n - 1) break;
     }
   }
 
   // k nearest neighbours.
-  for (let i = 0; i < n; i++) {
-    const others = [];
-    for (let j = 0; j < n; j++) if (j !== i) others.push([dist(i, j), j]);
-    others.sort((a, b) => a[0] - b[0]);
-    for (let m = 0; m < Math.min(params.k, others.length) && others[m][0] < Infinity; m++) add(i, others[m][1]);
+  if (params.k > 0) {
+    const near = Array.from({ length: n }, () => []);
+    for (const [, i, j] of pairs) {
+      if (near[i].length < params.k && ok(i, j)) near[i].push(j);
+      if (near[j].length < params.k && ok(i, j)) near[j].push(i);
+    }
+    near.forEach((list, i) => list.forEach(j => add(i, j)));
   }
 
   // Long links between random pairs.
@@ -241,113 +254,12 @@ function radius(i) {
 
 // ---------- rendering ----------
 
-function drawShapes(ctx, color = '#000') {
-  ctx.fillStyle = ctx.strokeStyle = color;
-  ctx.lineCap = 'round';
-  ctx.lineWidth = params.line;
-  ctx.beginPath();
-  for (const [a, b] of edges) {
-    ctx.moveTo(nodes[a].x, nodes[a].y);
-    ctx.lineTo(nodes[b].x, nodes[b].y);
-  }
-  ctx.stroke();
-  ctx.beginPath();
-  for (let i = 0; i < nodes.length; i++) {
-    const r = radius(i);
-    ctx.moveTo(nodes[i].x + r, nodes[i].y);
-    ctx.arc(nodes[i].x, nodes[i].y, r, 0, Math.PI * 2);
-  }
-  ctx.fill();
-}
-
-function boxBlurH(src, dst, w, h, r) {
-  const inv = 1 / (2 * r + 1);
-  for (let y = 0; y < h; y++) {
-    const row = y * w;
-    let sum = 0;
-    for (let x = 0; x <= r && x < w; x++) sum += src[row + x];
-    for (let x = 0; x < w; x++) {
-      dst[row + x] = sum * inv;
-      const add = x + r + 1, sub = x - r;
-      if (add < w) sum += src[row + add];
-      if (sub >= 0) sum -= src[row + sub];
-    }
-  }
-}
-
-function boxBlurV(src, dst, w, h, r) {
-  const inv = 1 / (2 * r + 1);
-  const sum = new Float32Array(w);
-  for (let y = 0; y <= r && y < h; y++) {
-    const row = y * w;
-    for (let x = 0; x < w; x++) sum[x] += src[row + x];
-  }
-  for (let y = 0; y < h; y++) {
-    const row = y * w, add = y + r + 1, sub = y - r;
-    for (let x = 0; x < w; x++) dst[row + x] = sum[x] * inv;
-    if (add < h) { const ar = add * w; for (let x = 0; x < w; x++) sum[x] += src[ar + x]; }
-    if (sub >= 0) { const sr = sub * w; for (let x = 0; x < w; x++) sum[x] -= src[sr + x]; }
-  }
-}
-
-// Renders the region [x0, x0+w) × [y0, y0+h) of a size×size image and returns
-// the (blurred) coverage field, 0..255. Blur + threshold is what melts the
-// joints between dots and connections into smooth, organic fillets.
-function renderField(size, x0, y0, w, h) {
-  const scale = size / D;
-  const r = Math.round(params.goo * scale);
-  const m = r > 0 ? r * 3 + 2 : 0;
-  const tw = w + 2 * m, th = h + 2 * m;
-  const c = document.createElement('canvas');
-  c.width = tw; c.height = th;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.setTransform(scale, 0, 0, scale, m - x0, m - y0);
-  drawShapes(ctx);
-  const data = ctx.getImageData(0, 0, tw, th).data;
-  let a = new Float32Array(tw * th);
-  for (let i = 0; i < a.length; i++) a[i] = data[i * 4 + 3];
-  c.width = c.height = 0;
-  if (r >= 1) {
-    let b = new Float32Array(tw * th);
-    for (let pass = 0; pass < 3; pass++) {
-      boxBlurH(a, b, tw, th, r);
-      boxBlurV(b, a, tw, th, r);
-    }
-    b = null;
-  }
-  const field = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) {
-    const src = (y + m) * tw + m;
-    field.set(a.subarray(src, src + w), y * w);
-  }
-  return { field, r };
-}
-
-function composite(field, w, h, r, transparent) {
-  const img = new ImageData(w, h);
-  const d = img.data;
-  const fg = params.invert ? 255 : 0, bg = 255 - fg;
-  const blurred = r >= 1;
-  for (let y = 0, i = 0, p = 0; y < h; y++) {
-    for (let x = 0; x < w; x++, i++, p += 4) {
-      let v = field[i];
-      if (blurred) {
-        // Threshold at 50% with a 1px antialiasing band: divide the distance
-        // from the threshold by the local gradient to get distance in pixels.
-        const gx = (field[x < w - 1 ? i + 1 : i] - field[x > 0 ? i - 1 : i]) * 0.5;
-        const gy = (field[y < h - 1 ? i + w : i] - field[y > 0 ? i - w : i]) * 0.5;
-        const g = Math.sqrt(gx * gx + gy * gy);
-        v = 127.5 + (v - 127.5) * 255 / Math.max(g, 0.5);
-      }
-      v = v < 0 ? 0 : v > 255 ? 255 : v;
-      if (transparent) {
-        d[p] = d[p + 1] = d[p + 2] = fg; d[p + 3] = v;
-      } else {
-        d[p] = d[p + 1] = d[p + 2] = bg + (fg - bg) * v / 255; d[p + 3] = 255;
-      }
-    }
-  }
-  return img;
+function scene() {
+  const pts = new Float32Array(nodes.length * 2), radii = new Float32Array(nodes.length);
+  nodes.forEach((n, i) => { pts[2 * i] = n.x; pts[2 * i + 1] = n.y; radii[i] = radius(i); });
+  const ed = new Int32Array(edges.length * 2);
+  edges.forEach(([a, b], i) => { ed[2 * i] = a; ed[2 * i + 1] = b; });
+  return { pts, radii, edges: ed, line: params.line, goo: params.goo, invert: params.invert };
 }
 
 // ---------- preview ----------
@@ -400,7 +312,15 @@ function draw() {
   requestAnimationFrame(() => { queued = false; render(); });
 }
 
+function regenerate() {
+  if (pendingGen === 2) generateLayout();
+  if (pendingGen) generateLinks();
+  pendingGen = 0;
+}
+
 function render() {
+  regenerate();
+  const sc = scene();
   const px = canvas.width, perCss = px / (cssSize + 2 * margin);
   const fg = params.invert ? '#fff' : '#000', bg = params.invert ? '#000' : '#fff';
   vctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -408,7 +328,7 @@ function render() {
   vctx.fillRect(0, 0, px, px);
   const s = perCss * cssSize / D;
   vctx.setTransform(s, 0, 0, s, margin * perCss, margin * perCss);
-  drawShapes(vctx, fg);
+  drawScene(vctx, sc, fg);
   const sigma = params.goo * cssSize / D; // CSS px
   const filter = sigma > 0.05
     ? `blur(${sigma.toFixed(2)}px) contrast(${Math.max(1, 4 * sigma * perCss).toFixed(1)})`
@@ -418,8 +338,8 @@ function render() {
   if (filter !== currentFilter) canvas.style.filter = currentFilter = filter;
   frame.style.background = bg;
   exact.style.visibility = 'hidden';
-  clearTimeout(settleTimer);
-  settleTimer = setTimeout(settle, 220);
+  version++;
+  scheduleSettle();
   document.getElementById('statDots').textContent = nodes.length;
   document.getElementById('statLinks').textContent = edges.length;
   document.getElementById('statEnds').textContent = degree.filter(d => d <= 1).length;
@@ -428,12 +348,36 @@ function render() {
 // Once the controls go quiet, lay the exact render the exporter produces over
 // the GPU approximation, so what you see is what you download. The GPU layer
 // stays untouched underneath, so hiding the overlay again never flashes.
-let settleTimer = 0, currentFilter = '';
+let settleTimer = 0, currentFilter = '', version = 0;
+
+// Background worker for the exact render; falls back to the main thread
+// (with a longer idle delay) where workers can't draw (older Safari).
+let worker = null, workerReady = false;
+try {
+  worker = new Worker('render-worker.js');
+  worker.onmessage = ({ data }) => {
+    if ('ready' in data) { workerReady = data.ready; if (!data.ready) worker = null; return; }
+    if (data.id !== version || data.size !== exact.width) return; // stale
+    ectx.putImageData(new ImageData(new Uint8ClampedArray(data.buf), data.size, data.size), 0, 0);
+    exact.style.visibility = 'visible';
+  };
+  worker.onerror = () => { worker = null; workerReady = false; };
+} catch (e) { worker = null; }
+
+function scheduleSettle() {
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(settle, workerReady ? 150 : 450);
+}
+
 function settle() {
-  if (drag) { settleTimer = setTimeout(settle, 220); return; }
+  if (drag || pendingGen) { scheduleSettle(); return; }
   const size = exact.width;
-  const { field, r } = renderField(size, 0, 0, size, size);
-  ectx.putImageData(composite(field, size, size, r, false), 0, 0);
+  if (workerReady) {
+    worker.postMessage({ id: version, scene: scene(), size });
+    return;
+  }
+  const { field, r } = renderField(scene(), size, 0, 0, size, size);
+  ectx.putImageData(composite(field, size, size, r, false, params.invert), 0, 0);
   exact.style.visibility = 'visible';
 }
 
@@ -451,6 +395,7 @@ function download(blob, name) {
 }
 
 async function exportPNG() {
+  regenerate();
   const size = +document.getElementById('res').value;
   const transparent = document.getElementById('transparent').checked;
   setBusy(true);
@@ -459,7 +404,7 @@ async function exportPNG() {
     out.width = out.height = size;
     const octx = out.getContext('2d');
     if (!octx) throw new Error('canvas too large for this browser');
-    const T = 2048;
+    const T = 2048, sc = scene();
     const tiles = Math.ceil(size / T) ** 2;
     let done = 0;
     for (let ty = 0; ty < size; ty += T) {
@@ -467,8 +412,8 @@ async function exportPNG() {
         statusEl.textContent = `Rendering ${size}px… ${Math.round(done / tiles * 100)}%`;
         await nextFrame();
         const w = Math.min(T, size - tx), h = Math.min(T, size - ty);
-        const { field, r } = renderField(size, tx, ty, w, h);
-        octx.putImageData(composite(field, w, h, r, transparent), tx, ty);
+        const { field, r } = renderField(sc, size, tx, ty, w, h);
+        octx.putImageData(composite(field, w, h, r, transparent, params.invert), tx, ty);
         done++;
       }
     }
@@ -583,13 +528,14 @@ function simplifyClosed(pts, eps) {
 }
 
 async function exportSVG() {
+  regenerate();
   const transparent = document.getElementById('transparent').checked;
   setBusy(true);
   try {
     statusEl.textContent = 'Tracing vector outlines…';
     await nextFrame();
     const N = 3000;
-    const { field } = renderField(N, 0, 0, N, N);
+    const { field } = renderField(scene(), N, 0, 0, N, N);
     const loops = traceContours(field, N);
     const s = D / N;
     let d = '';
@@ -641,11 +587,11 @@ function fmt(key, v) {
   return String(v);
 }
 
-function syncControls() {
+function syncControls(skip) {
   for (const k of NUMERIC) {
     const el = document.getElementById(k);
     if (!el) continue;
-    el.value = params[k];
+    if (k !== skip) el.value = params[k];
     const out = document.querySelector(`output[data-for="${k}"]`);
     if (out) out.textContent = fmt(k, params[k]);
   }
@@ -657,17 +603,26 @@ function syncControls() {
   document.getElementById('spreadLabel').textContent = params.shape === 'letter' ? 'Size' : 'Spread';
 }
 
-function onChange(key) {
-  if (LAYOUT_KEYS.has(key)) { generateLayout(); generateLinks(); }
-  else if (LINK_KEYS.has(key)) generateLinks();
-  syncControls();
-  saveParams();
+// Slider input can fire several times per frame; regenerate at most once per frame.
+let pendingGen = 0; // 2 = layout + links, 1 = links only
+function onChange(key, fromInput) {
+  if (LAYOUT_KEYS.has(key)) pendingGen = 2;
+  else if (LINK_KEYS.has(key)) pendingGen = Math.max(pendingGen, 1);
+  syncControls(fromInput);
+  saveParamsSoon();
   draw();
+}
+
+let saveTimer = 0;
+function saveParamsSoon() {
+  clearTimeout(saveTimer);
+  // Safari throws if history is updated more than ~100 times in 30s.
+  saveTimer = setTimeout(() => { try { saveParams(); } catch (e) {} }, 400);
 }
 
 for (const k of NUMERIC) {
   const el = document.getElementById(k);
-  if (el) el.addEventListener('input', () => { params[k] = +el.value; onChange(k); });
+  if (el) el.addEventListener('input', () => { params[k] = +el.value; onChange(k, k); });
 }
 for (const k of BOOLEAN) {
   const el = document.getElementById(k);

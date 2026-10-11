@@ -96,6 +96,10 @@ button:disabled { opacity: .5; cursor: progress; }
 #status { color: var(--muted); min-height: 1.4em; margin: 0 0 8px; font-size: 13px; }
 .hint { color: var(--muted); font-size: 12px; margin: 0; padding: 0 4px 8px; }
 
+@media (pointer: coarse) {
+  input[type=range] { height: 34px; }
+  input[type=range]::-webkit-slider-thumb { width: 28px; height: 28px; margin-top: -12px; }
+}
 @media (max-width: 760px) {
   body { height: auto; overflow: visible; display: block; }
   .topbar { position: sticky; top: 0; z-index: 3; padding: 10px 14px; padding-top: max(10px, env(safe-area-inset-top)); }
