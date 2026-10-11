@@ -116,8 +116,8 @@ function radius(i) {
 
 // ---------- rendering ----------
 
-function drawShapes(ctx) {
-  ctx.fillStyle = ctx.strokeStyle = '#000';
+function drawShapes(ctx, color = '#000') {
+  ctx.fillStyle = ctx.strokeStyle = color;
   ctx.lineCap = 'round';
   ctx.lineWidth = params.line;
   ctx.beginPath();
@@ -152,15 +152,16 @@ function boxBlurH(src, dst, w, h, r) {
 
 function boxBlurV(src, dst, w, h, r) {
   const inv = 1 / (2 * r + 1);
-  for (let x = 0; x < w; x++) {
-    let sum = 0;
-    for (let y = 0; y <= r && y < h; y++) sum += src[y * w + x];
-    for (let y = 0; y < h; y++) {
-      dst[y * w + x] = sum * inv;
-      const add = y + r + 1, sub = y - r;
-      if (add < h) sum += src[add * w + x];
-      if (sub >= 0) sum -= src[sub * w + x];
-    }
+  const sum = new Float32Array(w);
+  for (let y = 0; y <= r && y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) sum[x] += src[row + x];
+  }
+  for (let y = 0; y < h; y++) {
+    const row = y * w, add = y + r + 1, sub = y - r;
+    for (let x = 0; x < w; x++) dst[row + x] = sum[x] * inv;
+    if (add < h) { const ar = add * w; for (let x = 0; x < w; x++) sum[x] += src[ar + x]; }
+    if (sub >= 0) { const sr = sub * w; for (let x = 0; x < w; x++) sum[x] -= src[sr + x]; }
   }
 }
 
@@ -201,15 +202,24 @@ function composite(field, w, h, r, transparent) {
   const img = new ImageData(w, h);
   const d = img.data;
   const fg = params.invert ? 255 : 0, bg = 255 - fg;
-  // Threshold with a ~1px antialiasing band (edge gradient of a blurred step ≈ 102/σ per px).
-  const k = r >= 1 ? Math.max(1, 2.5 * r) : 1;
-  for (let i = 0, p = 0; i < field.length; i++, p += 4) {
-    let v = r >= 1 ? (field[i] - 127.5) * k + 127.5 : field[i];
-    v = v < 0 ? 0 : v > 255 ? 255 : v;
-    if (transparent) {
-      d[p] = d[p + 1] = d[p + 2] = fg; d[p + 3] = v;
-    } else {
-      d[p] = d[p + 1] = d[p + 2] = bg + (fg - bg) * v / 255; d[p + 3] = 255;
+  const blurred = r >= 1;
+  for (let y = 0, i = 0, p = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, i++, p += 4) {
+      let v = field[i];
+      if (blurred) {
+        // Threshold at 50% with a 1px antialiasing band: divide the distance
+        // from the threshold by the local gradient to get distance in pixels.
+        const gx = (field[x < w - 1 ? i + 1 : i] - field[x > 0 ? i - 1 : i]) * 0.5;
+        const gy = (field[y < h - 1 ? i + w : i] - field[y > 0 ? i - w : i]) * 0.5;
+        const g = Math.sqrt(gx * gx + gy * gy);
+        v = 127.5 + (v - 127.5) * 255 / Math.max(g, 0.5);
+      }
+      v = v < 0 ? 0 : v > 255 ? 255 : v;
+      if (transparent) {
+        d[p] = d[p + 1] = d[p + 2] = fg; d[p + 3] = v;
+      } else {
+        d[p] = d[p + 1] = d[p + 2] = bg + (fg - bg) * v / 255; d[p + 3] = 255;
+      }
     }
   }
   return img;
@@ -218,13 +228,18 @@ function composite(field, w, h, r, transparent) {
 // ---------- preview ----------
 
 const canvas = document.getElementById('view');
+const frame = document.getElementById('frame');
 const vctx = canvas.getContext('2d');
-let cssSize = 600;
+let cssSize = 600, margin = 60;
 let queued = false;
 
 const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
 const isTouch = matchMedia('(pointer: coarse)').matches;
 
+// The preview draws plain vector shapes and lets the GPU do the melting with a
+// CSS blur + contrast filter: the same blur-then-threshold the exporter runs
+// in JS, but cheap enough to follow a slider in real time. The canvas
+// overhangs the clipped frame so the blur never smears the artboard edges.
 function layoutCanvas() {
   const topbar = document.querySelector('.topbar');
   document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
@@ -235,8 +250,11 @@ function layoutCanvas() {
     cssSize = Math.min(board.clientWidth, board.clientHeight, 1100);
   }
   cssSize = Math.max(160, Math.floor(cssSize));
-  canvas.style.width = canvas.style.height = cssSize + 'px';
-  const px = Math.min(2200, Math.round(cssSize * (window.devicePixelRatio || 1)));
+  margin = Math.ceil(cssSize * 0.1);
+  frame.style.width = frame.style.height = cssSize + 'px';
+  const full = cssSize + 2 * margin;
+  Object.assign(canvas.style, { width: full + 'px', height: full + 'px', left: -margin + 'px', top: -margin + 'px' });
+  const px = Math.min(2600, Math.round(full * (window.devicePixelRatio || 1)));
   if (canvas.width !== px) canvas.width = canvas.height = px;
   draw();
 }
@@ -246,14 +264,39 @@ function draw() {
   queued = true;
   requestAnimationFrame(() => {
     queued = false;
-    const s = canvas.width;
-    const { field, r } = renderField(s, 0, 0, s, s);
-    vctx.putImageData(composite(field, s, s, r, false), 0, 0);
-    canvas.style.background = params.invert ? '#000' : '#fff';
+    const px = canvas.width, perCss = px / (cssSize + 2 * margin);
+    const fg = params.invert ? '#fff' : '#000', bg = params.invert ? '#000' : '#fff';
+    vctx.setTransform(1, 0, 0, 1, 0, 0);
+    vctx.fillStyle = bg;
+    vctx.fillRect(0, 0, px, px);
+    const s = perCss * cssSize / D;
+    vctx.setTransform(s, 0, 0, s, margin * perCss, margin * perCss);
+    drawShapes(vctx, fg);
+    const sigma = params.goo * cssSize / D;              // CSS px
+    const dpr = perCss;
+    canvas.style.filter = sigma > 0.05
+      ? `blur(${sigma.toFixed(2)}px) contrast(${Math.max(1, 4 * sigma * dpr).toFixed(1)})`
+      : 'none';
+    frame.style.background = bg;
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(settle, 220);
     document.getElementById('statDots').textContent = nodes.length;
     document.getElementById('statLinks').textContent = edges.length;
     document.getElementById('statEnds').textContent = degree.filter(d => d <= 1).length;
   });
+}
+
+// Once the controls go quiet, swap the GPU approximation for the exact
+// render the exporter produces, so what you see is what you download.
+let settleTimer = 0;
+function settle() {
+  if (drag) { settleTimer = setTimeout(settle, 220); return; }
+  const px = canvas.width, perCss = px / (cssSize + 2 * margin);
+  const size = Math.round(cssSize * perCss), off = Math.round(margin * perCss);
+  const { field, r } = renderField(size, 0, 0, size, size);
+  vctx.setTransform(1, 0, 0, 1, 0, 0);
+  vctx.putImageData(composite(field, size, size, r, false), off, off);
+  canvas.style.filter = 'none';
 }
 
 // ---------- export ----------
@@ -497,7 +540,7 @@ document.getElementById('svg').addEventListener('click', exportSVG);
 // ---------- direct manipulation ----------
 
 function toDesign(e) {
-  const rect = canvas.getBoundingClientRect();
+  const rect = frame.getBoundingClientRect();
   return { x: (e.clientX - rect.left) / rect.width * D, y: (e.clientY - rect.top) / rect.height * D };
 }
 
@@ -518,7 +561,7 @@ function addNode(p) {
   draw();
 }
 
-canvas.addEventListener('pointerdown', e => {
+frame.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   const p = toDesign(e), i = hit(p);
   press = { x: e.clientX, y: e.clientY, moved: false, timer: 0 };
@@ -531,10 +574,10 @@ canvas.addEventListener('pointerdown', e => {
       if (drag && !press.moved) { const k = drag.i; endDrag(); removeNode(k); press = null; }
     }, 550);
   }
-  canvas.setPointerCapture(e.pointerId);
-  canvas.classList.add('dragging');
+  frame.setPointerCapture(e.pointerId);
+  frame.classList.add('dragging');
 });
-canvas.addEventListener('pointermove', e => {
+frame.addEventListener('pointermove', e => {
   if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) press.moved = true;
   const p = toDesign(e);
   if (drag) {
@@ -542,15 +585,15 @@ canvas.addEventListener('pointermove', e => {
     nodes[drag.i].y = Math.min(D, Math.max(0, p.y + drag.dy));
     draw();
   } else if (e.pointerType === 'mouse') {
-    canvas.classList.toggle('over', hit(p) >= 0);
+    frame.classList.toggle('over', hit(p) >= 0);
   }
 });
 function endDrag() {
   if (press) clearTimeout(press.timer);
   drag = null;
-  canvas.classList.remove('dragging');
+  frame.classList.remove('dragging');
 }
-canvas.addEventListener('pointerup', e => {
+frame.addEventListener('pointerup', e => {
   const wasTap = press && !press.moved && !drag;
   endDrag();
   press = null;
@@ -566,13 +609,13 @@ canvas.addEventListener('pointerup', e => {
     }
   }
 });
-canvas.addEventListener('pointercancel', () => { endDrag(); press = null; });
-canvas.addEventListener('contextmenu', e => {
+frame.addEventListener('pointercancel', () => { endDrag(); press = null; });
+frame.addEventListener('contextmenu', e => {
   e.preventDefault();
   const i = hit(toDesign(e));
   if (i >= 0 && !isTouch) removeNode(i);
 });
-canvas.addEventListener('dblclick', e => {
+frame.addEventListener('dblclick', e => {
   if (isTouch) return;
   const p = toDesign(e);
   if (hit(p) < 0) addNode(p);

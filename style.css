@@ -28,13 +28,15 @@ body {
   background: radial-gradient(circle at 50% 40%, #161a20 0%, var(--bg) 70%);
 }
 .artboard { flex: 1; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center; }
-#view {
-  display: block; border-radius: 10px; background: #fff;
+#frame {
+  position: relative; overflow: hidden; border-radius: 10px; background: #fff; flex: none;
   box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 20px 60px rgba(0,0,0,.55);
-  touch-action: none; cursor: crosshair; -webkit-user-select: none; user-select: none;
+  isolation: isolate; transform: translateZ(0);
+  touch-action: none; cursor: crosshair; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
-#view.over { cursor: grab; }
-#view.dragging { cursor: grabbing; }
+#view { position: absolute; display: block; pointer-events: none; }
+#frame.over { cursor: grab; }
+#frame.dragging { cursor: grabbing; }
 
 .stats { flex: none; display: flex; gap: 10px; }
 .stats div {
